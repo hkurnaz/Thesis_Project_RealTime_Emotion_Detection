@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Duygu Tanıma</title>
+  <style>
+    :root {
+      --bg-color: #1f1f1f;
+      --card-bg: rgba(30,30,30,0.9);
+      --text: #ddd;
+      --border: #444;
+    }
+    * { box-sizing: border-box; margin:0; padding:0 }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background: var(--bg-color);
+      color: var(--text);
+      font-family: sans-serif;
+    }
+    .card {
+      background: var(--card-bg);
+      padding: 1.5rem;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      width: 900px;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .lang-select select,
+    #cameraSelect {
+      padding: 0.5rem;
+      font-size: 1rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #2b2b2b;
+      color: var(--text);
+    }
+    .status {
+      align-self: flex-end;
+      font-size: 0.9rem;
+      color: #aaa;
+      margin-bottom: 0.5rem;
+    }
+    .content {
+      display: flex;
+      gap: 1rem;
+    }
+    .video-container {
+      position: relative;
+      width: 640px;
+      height: 480px;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      border: 3px solid var(--border);
+      border-radius: 8px;
+      object-fit: cover;
+      background: black;
+    }
+    .boxes {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+    }
+    .box {
+      position: absolute;
+      border: 3px solid;
+      border-radius: 4px;
+      transition: all 0.2s ease;
+    }
+    .results-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .results-panel h2 {
+      font-size: 1.2rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.25rem;
+      margin-bottom: 0.5rem;
+    }
+    ul#resultsList {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      max-height: 480px;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+    ul#resultsList::-webkit-scrollbar { width:0; height:0; }
+    ul#resultsList li {
+      width: 100%;
+      padding: 0.5rem;
+      margin: 0.25rem 0;
+      background: rgba(0,0,0,0.3);
+      border-left: 5px solid;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    ul#resultsList li.no-face {
+      border-left: none !important;
+      position: relative;
+      left: -5px;
+      width: calc(100% + 5px);
+      margin: 0.25rem 0;
+      padding: 0.5rem;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="lang-select">
+        <select id="langSelect">
+          <option value="tr">Türkçe</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+      <select id="cameraSelect"></select>
+    </div>
+    <div class="status" id="status"></div>
+    <div class="content">
+      <div class="video-container">
+        <video id="video" autoplay playsinline></video>
+        <div class="boxes" id="boxes"></div>
+      </div>
+      <div class="results-panel">
+        <h2 id="resultsHeader"></h2>
+        <ul id="resultsList"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const video         = document.getElementById('video');
+    const boxesDiv      = document.getElementById('boxes');
+    const cameraSelect  = document.getElementById('cameraSelect');
+    const langSelect    = document.getElementById('langSelect');
+    const statusDiv     = document.getElementById('status');
+    const resultsHeader = document.getElementById('resultsHeader');
+    const resultsList   = document.getElementById('resultsList');
+
+    let currentStream   = null;
+    let lang            = 'tr';
+    let history         = {};
+    let lastPredictions = [];
+
+    const texts = {
+      tr: {
+        cameraActive:       "Kamera aktif",
+        cameraError:        "Kamera hatası: ",
+        permissionDenied:   "İzin reddedildi: ",
+        resultsTitle:       "Sonuçlar",
+        noFace:             "Yüz bulunamadı"
+      },
+      en: {
+        cameraActive:       "Camera active",
+        cameraError:        "Camera error: ",
+        permissionDenied:   "Permission denied: ",
+        resultsTitle:       "Results",
+        noFace:             "No face detected"
+      }
+    };
+
+    const labelMap = {
+      tr: {
+        anger:      "Öfke",
+        disgust:    "Tiksinti",
+        fear:       "Korku",
+        happiness:  "Mutluluk",
+        neutrality: "Nötr",
+        sadness:    "Üzüntü",
+        surprise:   "Şaşkınlık"
+      },
+      en: {
+        anger:      "Anger",
+        disgust:    "Disgust",
+        fear:       "Fear",
+        happiness:  "Happiness",
+        neutrality: "Neutrality",
+        sadness:    "Sadness",
+        surprise:   "Surprise"
+      }
+    };
+
+    function t(key) {
+      return texts[lang][key];
+    }
+
+    function updateStaticTexts() {
+      statusDiv.innerText     = t('cameraActive');
+      resultsHeader.innerText = t('resultsTitle');
+      // önceden alınmış tahminler varsa, yeniden göster
+      updateResults(lastPredictions);
+    }
+
+    // sayfa yüklendiğinde hemen statik metinleri ayarla
+    document.addEventListener('DOMContentLoaded', updateStaticTexts);
+
+    langSelect.onchange = () => {
+      lang = langSelect.value;
+      updateStaticTexts();
+    };
+
+    async function startStream(deviceId) {
+      if (currentStream) currentStream.getTracks().forEach(t=>t.stop());
+      try {
+        const c = deviceId
+          ? { video: { deviceId:{ exact:deviceId } } }
+          : { video: true };
+        const stream = await navigator.mediaDevices.getUserMedia(c);
+        video.srcObject      = stream;
+        currentStream        = stream;
+        statusDiv.innerText  = t('cameraActive');
+      } catch(err) {
+        statusDiv.innerText  = t('cameraError') + err.message;
+      }
+    }
+
+    async function getCameras() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams     = devices.filter(d=>d.kind==='videoinput');
+        cameraSelect.innerHTML = '';
+        cams.forEach((d,i)=>{
+          const o = document.createElement('option');
+          o.value = d.deviceId;
+          o.text  = d.label || `Camera ${i+1}`;
+          cameraSelect.appendChild(o);
+        });
+        if (cams.length) startStream(cameraSelect.value);
+      } catch(err) {
+        statusDiv.innerText = t('permissionDenied') + err.message;
+      }
+    }
+
+    cameraSelect.onchange = () => startStream(cameraSelect.value);
+
+    (async()=>{
+      try {
+        const perm = await navigator.mediaDevices.getUserMedia({video:true});
+        perm.getTracks().forEach(t=>t.stop());
+        await getCameras();
+      } catch(err){
+        statusDiv.innerText = t('permissionDenied') + err.message;
+      }
+    })();
+
+    function updateBoxes(predictions) {
+      const ids = predictions.map(p=>p.id.toString());
+      Object.values(boxesDiv.children).forEach(el=>{
+        if (!ids.includes(el.dataset.id)) {
+          boxesDiv.removeChild(el);
+          delete history[el.dataset.id];
+        }
+      });
+      predictions.forEach(p=>{
+        const id    = p.id.toString();
+        const color = ["#e91e63","#03a9f4","#8bc34a","#ff9800","#9c27b0"][(p.id-1)%5];
+        let el = boxesDiv.querySelector(`[data-id="${id}"]`);
+        if (!el) {
+          el = document.createElement('div');
+          el.classList.add('box');
+          el.dataset.id = id;
+          boxesDiv.appendChild(el);
+        }
+        Object.assign(el.style, {
+          borderColor: color,
+          left:  `${p.box[0]}px`,
+          top:   `${p.box[1]}px`,
+          width: `${p.box[2]-p.box[0]}px`,
+          height:`${p.box[3]-p.box[1]}px`
+        });
+      });
+    }
+
+    function updateResults(predictions) {
+      lastPredictions = predictions;
+      resultsList.innerHTML = '';
+      if (predictions.length === 0) {
+        const li = document.createElement('li');
+        li.classList.add('no-face');
+        li.innerText = t('noFace');
+        resultsList.appendChild(li);
+        return;
+      }
+      predictions.forEach(p=>{
+        const id = p.id.toString();
+        if (!history[id]) history[id]=[];
+        history[id].push(p.label);
+        if (history[id].length>5) history[id].shift();
+        const counts = {};
+        history[id].forEach(l=>counts[l]=(counts[l]||0)+1);
+        let mode=p.label, max=0;
+        for (let l in counts) {
+          if (counts[l]>max){ max=counts[l]; mode=l; }
+        }
+        const li = document.createElement('li');
+        li.style.borderColor = ["#e91e63","#03a9f4","#8bc34a","#ff9800","#9c27b0"][(p.id-1)%5];
+        li.innerText = `#${id}: ${labelMap[lang][mode]}`;
+        resultsList.appendChild(li);
+      });
+    }
+
+    setInterval(async()=>{
+      if (!video.videoWidth) return;
+      const tmp       = document.createElement('canvas');
+      tmp.width       = video.videoWidth;
+      tmp.height      = video.videoHeight;
+      tmp.getContext('2d').drawImage(video,0,0);
+      const blob      = await new Promise(r=>tmp.toBlob(r,'image/jpeg'));
+      const form      = new FormData();
+      form.append('file', blob, 'frame.jpg');
+      try {
+        const res      = await fetch('/predict',{ method:'POST', body:form });
+        const { predictions } = await res.json();
+        updateBoxes(predictions);
+        updateResults(predictions);
+      } catch(e) {
+        console.error(e);
+      }
+    }, 500);
+  </script>
+</body>
+</html>
